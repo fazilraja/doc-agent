@@ -1,0 +1,28 @@
+[project]
+name = "doc-agent"
+version = "0.1.0"
+description = "A powerful documentation crawler and processor"
+authors = [
+    {name = "Fazil Raja", email = "70337151+fazilraja@users.noreply.github.com"},
+]
+dependencies = [
+    "crawl4ai>=0.5.0",
+    "requests>=2.31.0",
+    "psutil>=5.9.0",
+]
+requires-python = ">=3.9"
+readme = "README.md"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = [
+    "pytest>=7.4.0",
+    "black>=23.7.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.1",
+]
