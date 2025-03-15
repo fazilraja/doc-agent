@@ -12,15 +12,25 @@ A powerful documentation crawler and processor that allows you to chat with docu
 
 ## Installation
 
+This project uses `uv` for dependency management. First, make sure you have `uv` installed:
+
+```bash
+pip install uv
+```
+
+Then:
+
 ```bash
 # Clone the repository
 git clone https://github.com/fazilraja/doc-agent.git
 cd doc-agent
 
-# Install dependencies using uv
+# Create and activate virtual environment
 uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv pip install -r requirements.txt
+
+# Install dependencies and create lock file
+uv pip install .
 ```
 
 ## Usage
@@ -41,6 +51,30 @@ The crawler uses several configuration options:
 - Concurrent requests: 10 (adjustable)
 - Rate limiting: 1-2 second delay between requests
 - Retry attempts: 3 with exponential backoff
+
+## Development
+
+For development, install dev dependencies:
+
+```bash
+uv pip install ".[dev]"
+```
+
+Run tests:
+```bash
+uv run pytest
+```
+
+Format code:
+```bash
+uv run black src tests
+uv run isort src tests
+```
+
+Type checking:
+```bash
+uv run mypy src
+```
 
 ## Output
 
