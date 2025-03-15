@@ -345,6 +345,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "crawl4ai" },
+    { name = "mirascope" },
     { name = "psutil" },
     { name = "requests" },
     { name = "supabase" },
@@ -353,9 +354,19 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "crawl4ai", specifier = ">=0.5.0" },
+    { name = "mirascope", specifier = ">=1.22.0" },
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "supabase", specifier = ">=2.13.0" },
+]
+
+[[package]]
+name = "docstring-parser"
+version = "0.16"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/08/12/9c22a58c0b1e29271051222d8906257616da84135af9ed167c9e28f85cb3/docstring_parser-0.16.tar.gz", hash = "sha256:538beabd0af1e2db0146b6bd3caa526c35a34d61af9fd2887f3a8a27a739aa6e", size = 26565 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/7c/e9fcff7623954d86bdc17782036cbf715ecab1bec4847c008557affe1ca8/docstring_parser-0.16-py3-none-any.whl", hash = "sha256:bf0a1387354d3691d102edef7ec124f219ef639982d096e26e3b60aeffa90637", size = 36533 },
 ]
 
 [[package]]
@@ -820,6 +831,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979 },
+]
+
+[[package]]
+name = "mirascope"
+version = "1.22.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "docstring-parser" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/64/307141b732ad555b35c3b7c9c9dafc58b771e8793155a14351bcc5dc7abb/mirascope-1.22.0.tar.gz", hash = "sha256:524ed5946354b9d5509ee9818f870a7e3c09db99a05fde62a5740c3ed3e68611", size = 66777930 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/b9/a402ee1ea77dd8c769adfc624d96b530159b75139dda96b7f2c09830fe71/mirascope-1.22.0-py3-none-any.whl", hash = "sha256:df61484cd9a64bdef1ea96ffffe86ed6c82034a9cfa32e66a1f4ad2b53b29c20", size = 369059 },
 ]
 
 [[package]]

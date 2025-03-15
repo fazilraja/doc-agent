@@ -4,7 +4,7 @@ import os
 import re
 from typing import List, Tuple
 from xml.etree import ElementTree
-
+from dotenv import load_dotenv
 import requests
 from crawl4ai import (
     AsyncWebCrawler,
@@ -17,7 +17,17 @@ from crawl4ai import (
     RateLimiter,
 )
 from supabase import Client, create_client
+from dataclasses import dataclass
+from typing import List, Tuple, Dict, Any
+from mirascope import llm, prompt_template
+from pydantic import BaseModel, Field
+from google import genai
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 
+load_dotenv()
+
+client = genai.Client(api_key="GEMINI_API_KEY")
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
@@ -27,6 +37,183 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+@dataclass
+class ProcessedChunk:
+    url: str
+    chunk_number: int
+    title: str
+    summary: str
+    content: str
+    metadata: Dict[str, Any]
+    embedding: List[float]
+    
+async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChunk:
+    """Process a single chunk of text."""
+    # Get title and summary
+    extracted = await summarize_chunk(chunk)
+    
+    # Get embedding
+    embedding = await get_embedding(chunk)
+    
+    # Create metadata
+    metadata = {
+        "source": "pydantic_ai_docs",
+        "chunk_size": len(chunk),
+        "crawled_at": datetime.now(timezone.utc).isoformat(),
+        "url_path": urlparse(url).path
+    }
+    
+    return ProcessedChunk(
+        url=url,
+        chunk_number=chunk_number,
+        title=extracted['title'],
+        summary=extracted['summary'],
+        content=chunk,
+        metadata=metadata,
+        embedding=embedding
+    )
+
+async def insert_chunk(chunk: ProcessedChunk):
+    """Insert a processed chunk into Supabase."""
+    try:
+        data = {
+            "url": chunk.url,
+            "chunk_number": chunk.chunk_number,
+            "title": chunk.title,
+            "summary": chunk.summary,
+            "content": chunk.content,
+            "metadata": chunk.metadata,
+            "embedding": chunk.embedding
+        }
+        
+        result = supabase.table("site_pages").insert(data).execute()
+        print(f"Inserted chunk {chunk.chunk_number} for {chunk.url}")
+        return result
+    except Exception as e:
+        print(f"Error inserting chunk: {e}")
+        return None
+
+    
+def chunk_text(text: str, chunk_size: int = 1000) -> List[str]:
+    """
+    Chunk text into smaller pieces of a specified size. Respect code blocks and paragraphs.
+    
+    Args:
+        text: The text to chunk
+        chunk_size: The size of each chunk (default is 1000 characters)
+        
+    Returns:
+        List[str]: List of text chunks, with code blocks preserved as single chunks
+    """
+    chunks = []
+    chunk_start = 0
+    text_length = len(text)
+    in_code_block = False
+    
+    while chunk_start < text_length:
+        # calc position
+        chunk_end = chunk_start + chunk_size
+        
+        # if at the end of the text, grab the remaining text
+        if chunk_end >= text_length:
+            chunks.append(text[chunk_start:].strip())
+            break
+        
+        chunk_block = text[chunk_start:chunk_end]
+        
+        # Handle code blocks
+        code_block_start = chunk_block.find("```")
+        if code_block_start != -1:
+            if not in_code_block:  # Found start of code block
+                # Look for the end of this code block
+                code_block_end = text.find("```", chunk_start + code_block_start + 3)
+                if code_block_end != -1:
+                    # Include the entire code block as one chunk
+                    chunk = text[chunk_start:code_block_end + 3].strip()
+                    if chunk:
+                        chunks.append(chunk)
+                    chunk_start = code_block_end + 3
+                    continue
+                else:
+                    # Code block continues beyond what we can see
+                    in_code_block = True
+                    chunk_end = chunk_start + code_block_start
+            else:  # Found end of code block
+                in_code_block = False
+                chunk_end = chunk_start + code_block_start + 3
+        
+        # If we're in a code block, continue to next iteration to find its end
+        if in_code_block:
+            chunk_end = min(chunk_end, text_length)
+            chunks.append(text[chunk_start:chunk_end].strip())
+            chunk_start = chunk_end
+            continue
+            
+        # if no code block try to find a paragraph
+        if '\n\n' in chunk_block:
+            # find the end of the paragraph
+            last_break = chunk_block.find('\n\n')
+            if last_break > chunk_size * 0.3:  # break past 30% of chunk
+                chunk_end = chunk_start + last_break
+                
+        # break at sentence if no code block or paragraph
+        elif '. ' in chunk_block:
+            last_period = chunk_block.rfind('. ')
+            if last_period > chunk_size * 0.3:  # break past 30% of chunk
+                chunk_end = chunk_start + last_period + 1
+
+        # clean up the chunk
+        chunk = text[chunk_start:chunk_end].strip()
+        if chunk:
+            chunks.append(chunk)
+        
+        # update the chunk start
+        chunk_start = max(chunk_start + 1, chunk_end)
+        
+    return chunks
+            
+class ChunkMetadata(BaseModel):
+    title: str = Field(
+        ...,
+        max_length=80,
+        description="Document title if present, otherwise a descriptive topic-based title. Avoid generic titles like 'Introduction'."
+    )
+    summary: str = Field(
+        ...,
+        max_length=200,
+        description="Concise overview focusing on key technical concepts and main points"
+    )
+                
+@llm.call(provider='google', model="gemini-2.0-flash-lite", response_model=ChunkMetadata)
+@prompt_template(
+    """
+    SYSTEM: You are a documentation analyzer that creates clear, informative titles and summaries.
+    USER: Extract a title and summary from this text chunk: {chunk}
+    """
+)
+async def summarize_chunk(chunk: str) -> str: ...
+
+async def get_embedding(text: str) -> List[float]:
+    """
+    Get embeddings for a text using Google's embedding API.
+    
+    Args:
+        text: The text to get embeddings for
+
+    Returns:
+        List[float]: The embeddings for the text
+    """
+    try: 
+        result = client.models.embed_content(
+            model="gemini-embedding-exp-03-07",
+            contents=text,
+            task_type="retrieval_document")
+        return result.embeddings[1]
+    except Exception as e:
+        print(f"Error getting embeddings: {e}")
+        return [0] * 3072
+
+            
 def get_llms_urls(url: str) -> Tuple[List[str], bool]:
     """
     Fetches all URLs from the llms.txt file.
