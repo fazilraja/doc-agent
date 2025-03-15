@@ -65,10 +65,19 @@ Run tests:
 uv run pytest
 ```
 
-Format code:
+Format and lint code:
 ```bash
+# Format with black
 uv run black src tests
+
+# Sort imports
 uv run isort src tests
+
+# Lint with Ruff
+uv run ruff check src tests
+
+# Auto-fix Ruff violations
+uv run ruff check --fix src tests
 ```
 
 Type checking:

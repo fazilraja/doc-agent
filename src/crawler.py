@@ -1,25 +1,102 @@
-import os
-import sys
 import argparse
 import asyncio
-import requests
+import os
+import re
+from typing import List, Tuple
 from xml.etree import ElementTree
-from typing import List
+
+import requests
 from crawl4ai import (
-    AsyncWebCrawler, 
-    BrowserConfig, 
-    CrawlerRunConfig, 
+    AsyncWebCrawler,
+    BrowserConfig,
     CacheMode,
+    CrawlerMonitor,
+    CrawlerRunConfig,
+    DisplayMode,
     MemoryAdaptiveDispatcher,
     RateLimiter,
-    CrawlerMonitor,
-    DisplayMode
 )
+from supabase import Client, create_client
+
+url: str = os.environ.get("SUPABASE_URL")
+key: str = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
 
 # Get the absolute path of the project root directory
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+def get_llms_urls(url: str) -> Tuple[List[str], bool]:
+    """
+    Fetches all URLs from the llms.txt file.
+    
+    Args:
+        url: Base URL to fetch llms.txt from
+        
+    Returns:
+        Tuple[List[str], bool]: List of URLs found in llms.txt and a boolean indicating success
+    """
+    llms_url = url.rstrip('/') + "/llms.txt"
+    
+    try:
+        response = requests.get(llms_url)
+        response.raise_for_status()
+        
+        # Use regex to find all markdown links
+        # This pattern matches [text](url) where url doesn't contain parentheses
+        pattern = r'\[([^\]]+)\]\(([^)]+)\)'
+        matches = re.findall(pattern, response.text)
+        
+        # Extract just the URLs from the matches
+        urls = [url for _, url in matches]
+        
+        if urls:
+            print(f"Successfully parsed llms.txt and found {len(urls)} URLs")
+            return urls, True
+        else:
+            print("No URLs found in llms.txt")
+            return [], False
+            
+    except Exception as e:
+        print(f"Error fetching llms.txt: {e}")
+        return [], False
+
+def get_sitemap_urls(url: str) -> List[str]:
+    """
+    Fetches all URLs from the sitemap.
+    
+    Args:
+        url: Base URL to fetch sitemap from
+        
+    Returns:
+        List[str]: List of URLs found in the sitemap
+    """
+    # First try llms.txt
+    urls, success = get_llms_urls(url)
+    if success:
+        return urls
+        
+    # Fall back to sitemap.xml if llms.txt fails
+    print("Falling back to sitemap.xml...")
+    sitemap_url = url.rstrip('/') + "/sitemap.xml"
+                
+    try:
+        response = requests.get(sitemap_url)
+        response.raise_for_status()
+        
+        # Parse the XML
+        root = ElementTree.fromstring(response.content)
+        
+        # Extract all URLs from the sitemap
+        # The namespace is usually defined in the root element
+        namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+        urls = [loc.text for loc in root.findall('.//ns:loc', namespace)]
+        
+        return urls
+    except Exception as e:
+        print(f"Error fetching sitemap: {e}")
+        return []
 
 async def crawl_parallel(urls: List[str]):
     """
@@ -96,39 +173,9 @@ async def crawl_parallel(urls: List[str]):
                 print(f"Memory Usage: {dr.memory_usage:.1f}MB")
                 print(f"Duration: {dr.end_time - dr.start_time}")
 
-    print(f"\nSummary:")
+    print("\nSummary:")
     print(f"  - Successfully crawled: {success_count}")
     print(f"  - Failed: {fail_count}")
-
-def get_sitemap_urls(url: str) -> List[str]:
-    """
-    Fetches all URLs from the sitemap.
-    
-    Args:
-        url: Base URL to fetch sitemap from
-        
-    Returns:
-        List[str]: List of URLs found in the sitemap
-    """
-    # Get the sitemap url from the url
-    sitemap_url = url + "/sitemap.xml"
-                
-    try:
-        response = requests.get(sitemap_url)
-        response.raise_for_status()
-        
-        # Parse the XML
-        root = ElementTree.fromstring(response.content)
-        
-        # Extract all URLs from the sitemap
-        # The namespace is usually defined in the root element
-        namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-        urls = [loc.text for loc in root.findall('.//ns:loc', namespace)]
-        
-        return urls
-    except Exception as e:
-        print(f"Error fetching sitemap: {e}")
-        return []        
 
 async def main():
     # Set up argument parser
