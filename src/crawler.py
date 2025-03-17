@@ -46,7 +46,7 @@ class ProcessedChunk:
     content: str
     metadata: Dict[str, Any]
     embedding: List[float]
-    
+        
 async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChunk:
     """Process a single chunk of text."""
     # Get title and summary
@@ -55,12 +55,36 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
     # Get embedding
     embedding = await get_embedding(chunk)
     
+    # Parse URL to get domain for source name
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc
+    
+    # Extract the main domain name
+    # Handle various patterns like www.example.com, docs.example.com, etc.
+    domain_parts = domain.split('.')
+    
+    if len(domain_parts) >= 2:
+        # For common TLDs like .com, .org, .io - use the second-to-last part
+        if domain_parts[-1] in ['com', 'org', 'net', 'io', 'ai', 'dev']:
+            main_domain = domain_parts[-2]
+        # For country-specific TLDs like .co.uk - use the third-to-last part
+        elif len(domain_parts) >= 3 and domain_parts[-2] in ['co', 'com', 'org', 'net']:
+            main_domain = domain_parts[-3]
+        else:
+            main_domain = domain_parts[-2]
+    else:
+        # Fallback for unusual domains
+        main_domain = domain
+    
+    # Clean up and format the source name
+    source_name = main_domain.replace('-', '_') + "_docs"
+    
     # Create metadata
     metadata = {
-        "source": "pydantic_ai_docs",
+        "source": source_name,
         "chunk_size": len(chunk),
         "crawled_at": datetime.now(timezone.utc).isoformat(),
-        "url_path": urlparse(url).path
+        "url_path": parsed_url.path
     }
     
     return ProcessedChunk(
@@ -344,7 +368,7 @@ async def crawl_parallel(urls: List[str]):
                 with open(output_file, "w", encoding='utf-8') as f:
                     f.write(f"# Crawl Result for {result.url}\n\n")
                     if result.success:
-                        f.write(f"## Content\n\n{result.markdown}\n")
+                        await process_and_store_document(result.url, result.markdown)
                         success_count += 1
                     else:
                         f.write(f"## Error\n\n```\n{result.error_message}\n```\n")
@@ -363,6 +387,27 @@ async def crawl_parallel(urls: List[str]):
     print("\nSummary:")
     print(f"  - Successfully crawled: {success_count}")
     print(f"  - Failed: {fail_count}")
+    
+async def process_and_store_document(url: str, markdown: str):
+    """Process a document and store its chunks in parallel."""
+    # Split into chunks
+    chunks = chunk_text(markdown)
+    
+    # Process chunks in parallel
+    tasks = [
+        process_chunk(chunk, i, url) 
+        for i, chunk in enumerate(chunks)
+    ]
+    processed_chunks = await asyncio.gather(*tasks)
+    
+    # Store chunks in parallel
+    insert_tasks = [
+        insert_chunk(chunk) 
+        for chunk in processed_chunks
+    ]
+    await asyncio.gather(*insert_tasks)
+    
+
 
 async def main():
     # Set up argument parser
