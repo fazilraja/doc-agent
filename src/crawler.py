@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import os
 import re
+import logging
 from typing import List, Tuple
 from xml.etree import ElementTree
 from dotenv import load_dotenv
@@ -21,21 +22,42 @@ from dataclasses import dataclass
 from typing import List, Tuple, Dict, Any
 from mirascope import llm, prompt_template
 from pydantic import BaseModel, Field
-from google import genai
 from datetime import datetime, timezone
 from urllib.parse import urlparse
+import chamois
+import lilypad
 
 load_dotenv()
+lilypad.configure()
 
-client = genai.Client(api_key="GEMINI_API_KEY")
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("crawler.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Log environment setup
+logger.info("Setting up Supabase connection...")
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
+
+if not url or not key:
+    logger.error("SUPABASE_URL or SUPABASE_KEY environment variables not set")
+    raise ValueError("Supabase credentials missing")
+
 supabase: Client = create_client(url, key)
+logger.info("Supabase client created")
 
 # Get the absolute path of the project root directory
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+logger.info(f"Output directory created at {OUTPUT_DIR}")
 
 @dataclass
 class ProcessedChunk:
@@ -49,11 +71,17 @@ class ProcessedChunk:
         
 async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChunk:
     """Process a single chunk of text."""
+    logger.info(f"Processing chunk {chunk_number} for {url}")
+    
     # Get title and summary
+    logger.debug(f"Summarizing chunk {chunk_number} (size: {len(chunk)})")
     extracted = await summarize_chunk(chunk)
+    logger.debug(f"Got title: '{extracted['title']}' and summary for chunk {chunk_number}")
     
     # Get embedding
+    logger.debug(f"Getting embedding for chunk {chunk_number}")
     embedding = await get_embedding(chunk)
+    logger.debug(f"Received embedding vector of length {len(embedding)}")
     
     # Parse URL to get domain for source name
     parsed_url = urlparse(url)
@@ -87,6 +115,7 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
         "url_path": parsed_url.path
     }
     
+    logger.info(f"Chunk {chunk_number} processed successfully for {url}")
     return ProcessedChunk(
         url=url,
         chunk_number=chunk_number,
@@ -100,6 +129,8 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
 async def insert_chunk(chunk: ProcessedChunk):
     """Insert a processed chunk into Supabase."""
     try:
+        logger.info(f"Inserting chunk {chunk.chunk_number} for {chunk.url} into Supabase")
+        
         data = {
             "url": chunk.url,
             "chunk_number": chunk.chunk_number,
@@ -110,11 +141,30 @@ async def insert_chunk(chunk: ProcessedChunk):
             "embedding": chunk.embedding
         }
         
+        # Log detailed info about the insertion attempt
+        logger.debug(f"Inserting data: URL={chunk.url}, chunk={chunk.chunk_number}, " 
+                    f"title={chunk.title[:30]}..., content_length={len(chunk.content)}, "
+                    f"embedding_length={len(chunk.embedding)}")
+        
+        # Execute the insert and capture the response
         result = supabase.table("site_pages").insert(data).execute()
-        print(f"Inserted chunk {chunk.chunk_number} for {chunk.url}")
+        
+        # Log detailed response info
+        logger.debug(f"Supabase response: {result}")
+        logger.info(f"Successfully inserted chunk {chunk.chunk_number} for {chunk.url}")
+        
+        # Write to a success log file as a backup record
+        with open("successful_inserts.txt", "a") as f:
+            f.write(f"{datetime.now().isoformat()} - Inserted: {chunk.url} - Chunk: {chunk.chunk_number} - Title: {chunk.title[:50]}\n")
+            
         return result
     except Exception as e:
-        print(f"Error inserting chunk: {e}")
+        logger.error(f"Error inserting chunk {chunk.chunk_number} for {chunk.url}: {e}")
+        
+        # Write to a failure log file
+        with open("failed_inserts.txt", "a") as f:
+            f.write(f"{datetime.now().isoformat()} - Failed: {chunk.url} - Chunk: {chunk.chunk_number} - Error: {str(e)}\n")
+            
         return None
 
     
@@ -129,6 +179,7 @@ def chunk_text(text: str, chunk_size: int = 1000) -> List[str]:
     Returns:
         List[str]: List of text chunks, with code blocks preserved as single chunks
     """
+    logger.info(f"Chunking text of size {len(text)} characters with chunk size {chunk_size}")
     chunks = []
     chunk_start = 0
     text_length = len(text)
@@ -193,7 +244,8 @@ def chunk_text(text: str, chunk_size: int = 1000) -> List[str]:
         
         # update the chunk start
         chunk_start = max(chunk_start + 1, chunk_end)
-        
+    
+    logger.info(f"Text successfully chunked into {len(chunks)} chunks")
     return chunks
             
 class ChunkMetadata(BaseModel):
@@ -207,7 +259,8 @@ class ChunkMetadata(BaseModel):
         max_length=200,
         description="Concise overview focusing on key technical concepts and main points"
     )
-                
+
+@lilypad.generation()                
 @llm.call(provider='google', model="gemini-2.0-flash-lite", response_model=ChunkMetadata)
 @prompt_template(
     """
@@ -217,6 +270,7 @@ class ChunkMetadata(BaseModel):
 )
 async def summarize_chunk(chunk: str) -> str: ...
 
+@chamois.embed("openai:text-embedding-3-small", dims=1536)
 async def get_embedding(text: str) -> List[float]:
     """
     Get embeddings for a text using Google's embedding API.
@@ -228,14 +282,16 @@ async def get_embedding(text: str) -> List[float]:
         List[float]: The embeddings for the text
     """
     try: 
-        result = client.models.embed_content(
-            model="gemini-embedding-exp-03-07",
-            contents=text,
-            task_type="retrieval_document")
-        return result.embeddings[1]
+        logger.debug(f"Getting embedding for text of length {len(text)}")
+        @chamois.embed("openai:text-embedding-3-small", dims=1536)
+        async def split_text_async(text: str) -> list[str]:
+            return [text]
+        result = await split_text_async(text)
+        logger.debug("Successfully retrieved embedding")
+        return result[0].embedding
     except Exception as e:
-        print(f"Error getting embeddings: {e}")
-        return [0] * 3072
+        logger.error(f"Error getting embeddings: {e}")
+        return [0] * 1536
 
             
 def get_llms_urls(url: str) -> Tuple[List[str], bool]:
@@ -248,11 +304,15 @@ def get_llms_urls(url: str) -> Tuple[List[str], bool]:
     Returns:
         Tuple[List[str], bool]: List of URLs found in llms.txt and a boolean indicating success
     """
+    logger.info(f"Attempting to fetch URLs from llms.txt at {url}")
     llms_url = url.rstrip('/') + "/llms.txt"
     
     try:
+        logger.debug(f"Requesting {llms_url}")
         response = requests.get(llms_url)
         response.raise_for_status()
+        
+        logger.debug(f"Successfully fetched llms.txt, size: {len(response.text)} bytes")
         
         # Use regex to find all markdown links
         # This pattern matches [text](url) where url doesn't contain parentheses
@@ -263,14 +323,14 @@ def get_llms_urls(url: str) -> Tuple[List[str], bool]:
         urls = [url for _, url in matches]
         
         if urls:
-            print(f"Successfully parsed llms.txt and found {len(urls)} URLs")
+            logger.info(f"Successfully parsed llms.txt and found {len(urls)} URLs")
             return urls, True
         else:
-            print("No URLs found in llms.txt")
+            logger.warning("No URLs found in llms.txt")
             return [], False
             
     except Exception as e:
-        print(f"Error fetching llms.txt: {e}")
+        logger.error(f"Error fetching llms.txt: {e}")
         return [], False
 
 def get_sitemap_urls(url: str) -> List[str]:
@@ -283,18 +343,23 @@ def get_sitemap_urls(url: str) -> List[str]:
     Returns:
         List[str]: List of URLs found in the sitemap
     """
+    logger.info(f"Attempting to fetch URLs for {url}")
+    
     # First try llms.txt
     urls, success = get_llms_urls(url)
     if success:
         return urls
         
     # Fall back to sitemap.xml if llms.txt fails
-    print("Falling back to sitemap.xml...")
+    logger.info("Falling back to sitemap.xml...")
     sitemap_url = url.rstrip('/') + "/sitemap.xml"
                 
     try:
+        logger.debug(f"Requesting {sitemap_url}")
         response = requests.get(sitemap_url)
         response.raise_for_status()
+        
+        logger.debug(f"Successfully fetched sitemap.xml, size: {len(response.content)} bytes")
         
         # Parse the XML
         root = ElementTree.fromstring(response.content)
@@ -304,9 +369,10 @@ def get_sitemap_urls(url: str) -> List[str]:
         namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
         urls = [loc.text for loc in root.findall('.//ns:loc', namespace)]
         
+        logger.info(f"Successfully parsed sitemap.xml and found {len(urls)} URLs")
         return urls
     except Exception as e:
-        print(f"Error fetching sitemap: {e}")
+        logger.error(f"Error fetching sitemap: {e}")
         return []
 
 async def crawl_parallel(urls: List[str]):
@@ -316,7 +382,7 @@ async def crawl_parallel(urls: List[str]):
     Args:
         urls: List of URLs to crawl
     """
-    print("\n=== Parallel Crawling with Memory-Adaptive Dispatcher ===")
+    logger.info(f"\n=== Starting parallel crawling of {len(urls)} URLs ===")
     
     # Configure the browser
     browser_config = BrowserConfig(
@@ -333,7 +399,7 @@ async def crawl_parallel(urls: List[str]):
     
     # Configure the dispatcher with rate limiting and monitoring
     dispatcher = MemoryAdaptiveDispatcher(
-        memory_threshold_percent=70.0,  # Pause if memory exceeds 70%
+        memory_threshold_percent=95.0,  # Pause if memory exceeds 95%
         check_interval=1.0,
         max_session_permit=10,
         rate_limiter=RateLimiter(
@@ -350,13 +416,16 @@ async def crawl_parallel(urls: List[str]):
     success_count = 0
     fail_count = 0
 
+    logger.info("Initializing web crawler")
     async with AsyncWebCrawler(config=browser_config) as crawler:
+        logger.info("Starting crawler task execution")
         async for result in await crawler.arun_many(
             urls=urls,
             config=crawl_config,
             dispatcher=dispatcher
         ):
             # Process results as they come in
+            logger.info(f"Received crawl result for {result.url}")
             batch_output_dir = OUTPUT_DIR
             os.makedirs(batch_output_dir, exist_ok=True)
             
@@ -365,48 +434,78 @@ async def crawl_parallel(urls: List[str]):
             output_file = os.path.join(batch_output_dir, f"{safe_filename}.md")
             
             try:
+                logger.debug(f"Saving crawl result to {output_file}")
                 with open(output_file, "w", encoding='utf-8') as f:
                     f.write(f"# Crawl Result for {result.url}\n\n")
                     if result.success:
+                        logger.info(f"Crawl succeeded for {result.url}, processing document")
+                        f.write(result.markdown)  # Save the markdown for debugging
                         await process_and_store_document(result.url, result.markdown)
                         success_count += 1
                     else:
+                        logger.error(f"Crawl failed for {result.url}: {result.error_message}")
                         f.write(f"## Error\n\n```\n{result.error_message}\n```\n")
                         fail_count += 1
             except Exception as e:
-                print(f"Error saving results for {result.url}: {e}")
+                logger.error(f"Error saving results for {result.url}: {e}")
                 fail_count += 1
 
             # Print dispatch metrics
             if result.dispatch_result:
                 dr = result.dispatch_result
-                print(f"\nMetrics for {result.url}:")
-                print(f"Memory Usage: {dr.memory_usage:.1f}MB")
-                print(f"Duration: {dr.end_time - dr.start_time}")
+                metrics_info = (
+                    f"\nMetrics for {result.url}:\n"
+                    f"Memory Usage: {dr.memory_usage:.1f}MB\n"
+                    f"Duration: {dr.end_time - dr.start_time}"
+                )
+                logger.info(metrics_info)
 
-    print("\nSummary:")
-    print(f"  - Successfully crawled: {success_count}")
-    print(f"  - Failed: {fail_count}")
+    summary = (
+        f"\nCrawl Summary:\n"
+        f"  - Successfully crawled: {success_count}\n"
+        f"  - Failed: {fail_count}"
+    )
+    logger.info(summary)
+    
+    # Write summary to a file
+    with open("crawl_summary.txt", "a") as f:
+        f.write(f"\n--- Crawl run at {datetime.now().isoformat()} ---\n")
+        f.write(f"URLs attempted: {len(urls)}\n")
+        f.write(f"Success: {success_count}\n")
+        f.write(f"Failed: {fail_count}\n\n")
     
 async def process_and_store_document(url: str, markdown: str):
     """Process a document and store its chunks in parallel."""
+    logger.info(f"Processing document from {url} (size: {len(markdown)} bytes)")
+    
     # Split into chunks
     chunks = chunk_text(markdown)
+    logger.info(f"Document split into {len(chunks)} chunks")
     
     # Process chunks in parallel
+    logger.info(f"Processing {len(chunks)} chunks in parallel")
     tasks = [
         process_chunk(chunk, i, url) 
         for i, chunk in enumerate(chunks)
     ]
     processed_chunks = await asyncio.gather(*tasks)
+    logger.info(f"Successfully processed {len(processed_chunks)} chunks")
     
     # Store chunks in parallel
+    logger.info(f"Storing {len(processed_chunks)} chunks in Supabase")
     insert_tasks = [
         insert_chunk(chunk) 
         for chunk in processed_chunks
     ]
-    await asyncio.gather(*insert_tasks)
+    insert_results = await asyncio.gather(*insert_tasks)
     
+    # Count successful insertions
+    successful_inserts = sum(1 for result in insert_results if result is not None)
+    logger.info(f"Database insertion complete: {successful_inserts}/{len(processed_chunks)} chunks successfully inserted")
+    
+    # Record document processing in log file
+    with open("documents_processed.txt", "a") as f:
+        f.write(f"{datetime.now().isoformat()} - URL: {url} - Chunks: {len(chunks)} - Inserted: {successful_inserts}\n")
 
 
 async def main():
@@ -416,13 +515,28 @@ async def main():
                        help='Base URL to crawl (e.g., https://example.com)')
     
     args = parser.parse_args()
+    logger.info(f"Starting crawler for URL: {args.url}")
+    
+    # Test Supabase connection before starting
+    try:
+        logger.info("Testing Supabase connection...")
+        test_result = supabase.table("site_pages").select("count(*)", count="exact").execute()
+        logger.info(f"Supabase connection test successful: {test_result}")
+    except Exception as e:
+        logger.error(f"Supabase connection test failed: {e}")
+        logger.error("Crawling will continue but database insertions may fail")
     
     urls = get_sitemap_urls(args.url)
     if urls:
-        print(f"Found {len(urls)} URLs to crawl")
+        logger.info(f"Found {len(urls)} URLs to crawl")
         await crawl_parallel(urls)
     else:
-        print("No URLs found to crawl")    
+        logger.error("No URLs found to crawl")    
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        logger.info("Starting crawler script")
+        asyncio.run(main())
+        logger.info("Crawler script completed successfully")
+    except Exception as e:
+        logger.critical(f"Unhandled exception in main: {e}", exc_info=True)
