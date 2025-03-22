@@ -23,3 +23,7 @@ output/
 # OS
 .DS_Store
 Thumbs.db
+
+# Crawl summary
+crawl_summary.txt
+crawler.log
