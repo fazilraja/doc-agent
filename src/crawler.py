@@ -82,7 +82,7 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
     # Get title and summary
     logger.debug(f"Summarizing chunk {chunk_number} (size: {len(chunk)})")
     extracted = await summarize_chunk(chunk)
-    logger.debug(f"Got title: '{extracted['title']}' and summary for chunk {chunk_number}")
+    logger.debug(f"Got title: '{extracted.title}' and summary for chunk {chunk_number}")
     
     # Get embedding
     logger.debug(f"Getting embedding for chunk {chunk_number}")
@@ -125,8 +125,8 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
     return ProcessedChunk(
         url=url,
         chunk_number=chunk_number,
-        title=extracted['title'],
-        summary=extracted['summary'],
+        title=extracted.title,
+        summary=extracted.summary,
         content=chunk,
         metadata=metadata,
         embedding=embedding
@@ -272,7 +272,7 @@ class ChunkMetadata(BaseModel):
 @prompt_template(
     """
     SYSTEM: You are a documentation analyzer that creates clear, informative titles and summaries.
-    USER: Extract a title and summary from this text chunk: {chunk}. Keep it short and concise.
+    USER: Extract a title and summary from this text chunk: {chunk}. Keep it short and concise and not more than 200 characters.
     """
 )
 async def summarize_chunk(chunk: str) -> str: ...
