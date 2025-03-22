@@ -3,6 +3,7 @@ import asyncio
 import os
 import re
 import logging
+import sys
 from typing import List, Tuple
 from xml.etree import ElementTree
 from dotenv import load_dotenv
@@ -24,9 +25,10 @@ from mirascope import llm, prompt_template
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-import chamois
+from openai import AsyncOpenAI
 import lilypad
-
+import chamois
+import random
 load_dotenv()
 lilypad.configure()
 
@@ -44,10 +46,11 @@ logger = logging.getLogger(__name__)
 # Log environment setup
 logger.info("Setting up Supabase connection...")
 url: str = os.environ.get("SUPABASE_URL")
-key: str = os.environ.get("SUPABASE_KEY")
+key: str = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
 if not url or not key:
     logger.error("SUPABASE_URL or SUPABASE_KEY environment variables not set")
+    sys.exit(1)
     raise ValueError("Supabase credentials missing")
 
 supabase: Client = create_client(url, key)
@@ -58,6 +61,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 logger.info(f"Output directory created at {OUTPUT_DIR}")
+
+# Initialize OpenAI client
+client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 @dataclass
 class ProcessedChunk:
@@ -160,6 +166,7 @@ async def insert_chunk(chunk: ProcessedChunk):
         return result
     except Exception as e:
         logger.error(f"Error inserting chunk {chunk.chunk_number} for {chunk.url}: {e}")
+        sys.exit(1)
         
         # Write to a failure log file
         with open("failed_inserts.txt", "a") as f:
@@ -265,15 +272,14 @@ class ChunkMetadata(BaseModel):
 @prompt_template(
     """
     SYSTEM: You are a documentation analyzer that creates clear, informative titles and summaries.
-    USER: Extract a title and summary from this text chunk: {chunk}
+    USER: Extract a title and summary from this text chunk: {chunk}. Keep it short and concise.
     """
 )
 async def summarize_chunk(chunk: str) -> str: ...
 
-@chamois.embed("openai:text-embedding-3-small", dims=1536)
 async def get_embedding(text: str) -> List[float]:
     """
-    Get embeddings for a text using Google's embedding API.
+    Get embeddings for a text using OpenAI's text-embedding-3-small model.
     
     Args:
         text: The text to get embeddings for
@@ -291,7 +297,8 @@ async def get_embedding(text: str) -> List[float]:
         return result[0].embedding
     except Exception as e:
         logger.error(f"Error getting embeddings: {e}")
-        return [0] * 1536
+        sys.exit(1)
+        return [0] * 1536  # Return zero vector as fallback
 
             
 def get_llms_urls(url: str) -> Tuple[List[str], bool]:
@@ -388,7 +395,7 @@ async def crawl_parallel(urls: List[str]):
     browser_config = BrowserConfig(
         headless=True,
         verbose=False,
-        extra_args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox"],
+        extra_args=["--disable-dev-shm-usage", "--no-sandbox"],
     )
     
     # Configure the crawler
@@ -444,10 +451,12 @@ async def crawl_parallel(urls: List[str]):
                         success_count += 1
                     else:
                         logger.error(f"Crawl failed for {result.url}: {result.error_message}")
+                        sys.exit(1)
                         f.write(f"## Error\n\n```\n{result.error_message}\n```\n")
                         fail_count += 1
             except Exception as e:
                 logger.error(f"Error saving results for {result.url}: {e}")
+                sys.exit(1)
                 fail_count += 1
 
             # Print dispatch metrics
@@ -520,10 +529,25 @@ async def main():
     # Test Supabase connection before starting
     try:
         logger.info("Testing Supabase connection...")
-        test_result = supabase.table("site_pages").select("count(*)", count="exact").execute()
-        logger.info(f"Supabase connection test successful: {test_result}")
+        test_result = supabase.table("site_pages").select("*", count="exact").limit(0).execute()
+        row_count = test_result.count if hasattr(test_result, 'count') else 0
+        logger.info(f"Supabase connection test successful. Row count: {row_count}")
+        
+        # Use random chunk number to avoid conflicts
+        random_chunk = random.randint(10000, 99999)
+        
+        # test a insert query
+        result = supabase.table("site_pages").insert({
+            "url": "https://example.com",
+            "chunk_number": random_chunk,  # Use random chunk number
+            "title": "Example",
+            "summary": "Example summary",
+            "content": "Example content",
+            "metadata": {"test": "test"},  # Required field
+        }).execute()    
     except Exception as e:
         logger.error(f"Supabase connection test failed: {e}")
+        sys.exit(1)
         logger.error("Crawling will continue but database insertions may fail")
     
     urls = get_sitemap_urls(args.url)
@@ -532,6 +556,7 @@ async def main():
         await crawl_parallel(urls)
     else:
         logger.error("No URLs found to crawl")    
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
