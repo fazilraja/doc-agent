@@ -26,11 +26,8 @@ from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from openai import AsyncOpenAI
-import lilypad
-import chamois
 import random
 load_dotenv()
-lilypad.configure()
 
 # Set up logging
 logging.basicConfig(
@@ -81,9 +78,12 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
     
     # Get title and summary
     logger.debug(f"Summarizing chunk {chunk_number} (size: {len(chunk)})")
-    extracted = await summarize_chunk(chunk)
-    logger.debug(f"Got title: '{extracted.title}' and summary for chunk {chunk_number}")
-    
+    try:
+        extracted = await summarize_chunk(chunk, url)
+        logger.debug(f"Got title: '{extracted.title}' and summary for chunk {chunk_number}")
+    except Exception as e:
+        logger.error(f"Error summarizing chunk {chunk_number}: {e}")
+        
     # Get embedding
     logger.debug(f"Getting embedding for chunk {chunk_number}")
     embedding = await get_embedding(chunk)
@@ -166,11 +166,12 @@ async def insert_chunk(chunk: ProcessedChunk):
         return result
     except Exception as e:
         logger.error(f"Error inserting chunk {chunk.chunk_number} for {chunk.url}: {e}")
-        sys.exit(1)
         
         # Write to a failure log file
         with open("failed_inserts.txt", "a") as f:
             f.write(f"{datetime.now().isoformat()} - Failed: {chunk.url} - Chunk: {chunk.chunk_number} - Error: {str(e)}\n")
+        sys.exit(1)
+
             
         return None
 
@@ -267,15 +268,27 @@ class ChunkMetadata(BaseModel):
         description="Concise overview focusing on key technical concepts and main points"
     )
 
-@lilypad.generation()                
-@llm.call(provider='google', model="gemini-2.0-flash-lite", response_model=ChunkMetadata)
+@llm.call(provider='openai', model="gpt-4o-mini", response_model=ChunkMetadata)
 @prompt_template(
     """
-    SYSTEM: You are a documentation analyzer that creates clear, informative titles and summaries.
-    USER: Extract a title and summary from this text chunk: {chunk}. Keep it short and concise and not more than 200 characters.
+    SYSTEM: You are an AI specializing in extracting precise, concise titles and summaries from documentation chunks. Your PRIMARY RESPONSIBILITY is to NEVER exceed character limits.
+
+    STRICT CHARACTER LIMITS:
+    - TITLE: MAXIMUM 80 CHARACTERS (no exceptions)
+    - SUMMARY: MAXIMUM 200 CHARACTERS (no exceptions)
+
+    If your response exceeds these limits, it will be rejected. Count characters carefully.
+
+    Content guidelines:
+    - For TITLE: If this is the start of a document, extract its actual title. For a middle chunk, create a specific, descriptive title related to the content.
+    - For SUMMARY: Create a concise summary focusing on key technical concepts and main points.
+    - Avoid generic titles like "Introduction" or "Overview" unless that's the actual document title.
+    - Prioritize technical accuracy and informativeness within the character constraints.
+    
+    USER: URL: {url}\n\nChunk: {chunk}
     """
 )
-async def summarize_chunk(chunk: str) -> str: ...
+async def summarize_chunk(chunk: str, url: str) -> str: ...
 
 async def get_embedding(text: str) -> List[float]:
     """
@@ -287,18 +300,17 @@ async def get_embedding(text: str) -> List[float]:
     Returns:
         List[float]: The embeddings for the text
     """
-    try: 
-        logger.debug(f"Getting embedding for text of length {len(text)}")
-        @chamois.embed("openai:text-embedding-3-small", dims=1536)
-        async def split_text_async(text: str) -> list[str]:
-            return [text]
-        result = await split_text_async(text)
-        logger.debug("Successfully retrieved embedding")
-        return result[0].embedding
+    try:             
+        response = await client.embeddings.create(
+            input=text,
+            model="text-embedding-3-small"
+        )
+        embedding = response.data[0].embedding
+        return embedding
     except Exception as e:
         logger.error(f"Error getting embeddings: {e}")
-        sys.exit(1)
-        return [0] * 1536  # Return zero vector as fallback
+        # Return a zero vector as fallback
+        return [0] * 1536
 
             
 def get_llms_urls(url: str) -> Tuple[List[str], bool]:
@@ -452,12 +464,9 @@ async def crawl_parallel(urls: List[str]):
                     else:
                         logger.error(f"Crawl failed for {result.url}: {result.error_message}")
                         sys.exit(1)
-                        f.write(f"## Error\n\n```\n{result.error_message}\n```\n")
-                        fail_count += 1
             except Exception as e:
                 logger.error(f"Error saving results for {result.url}: {e}")
                 sys.exit(1)
-                fail_count += 1
 
             # Print dispatch metrics
             if result.dispatch_result:
@@ -548,7 +557,6 @@ async def main():
     except Exception as e:
         logger.error(f"Supabase connection test failed: {e}")
         sys.exit(1)
-        logger.error("Crawling will continue but database insertions may fail")
     
     urls = get_sitemap_urls(args.url)
     if urls:
