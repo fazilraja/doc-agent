@@ -1,97 +1,77 @@
-# Documentation Agent
+# Document Crawler Agent
 
-A powerful documentation crawler and processor that allows you to chat with documentation.
+A modular document crawler designed to index documentation from websites, generate embeddings, and store content in a database for future use in documentation assistants.
 
 ## Features
 
-- Parallel web crawling with memory-adaptive dispatching
-- Automatic sitemap detection and processing
-- Rate limiting and retry mechanisms
-- Real-time progress monitoring
-- Markdown output generation
+- **URL Discovery**: Find URLs to crawl from sitemaps or custom formats
+- **Web Crawling**: Crawl web pages to extract Markdown content
+- **Text Processing**: Chunk text intelligently and generate summaries
+- **Embedding Generation**: Create vector embeddings for document chunks
+- **Data Storage**: Store processed documents in a Supabase database
+
+## Architecture
+
+The system consists of several modular components:
+
+- `web_crawler.py`: URL discovery and web crawling
+- `text_processor.py`: Text chunking and summarization
+- `embedding_service.py`: Vector embedding generation
+- `data_store.py`: Database operations
+- `models.py`: Data models
+- `config.py`: Configuration management
 
 ## Installation
 
-This project uses `uv` for dependency management. First, make sure you have `uv` installed:
+1. Clone the repository:
+   ```
+   git clone https://github.com/yourusername/doc-agent.git
+   cd doc-agent
+   ```
 
-```bash
-pip install uv
-```
+2. Install dependencies:
+   ```
+   pip install -e .
+   ```
 
-Then:
-
-```bash
-# Clone the repository
-git clone https://github.com/fazilraja/doc-agent.git
-cd doc-agent
-
-# Create and activate virtual environment
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies and create lock file
-uv pip install .
-```
+3. Create a `.env` file with the following environment variables:
+   ```
+   OPENAI_API_KEY=your_openai_api_key
+   SUPABASE_URL=your_supabase_url
+   SUPABASE_SERVICE_ROLE_KEY=your_supabase_key
+   ```
 
 ## Usage
 
 ```bash
-python src/crawler.py --url https://example.com
+python src/main.py --url https://example.com
 ```
 
 The crawler will:
-1. Fetch the sitemap from the provided URL
-2. Crawl all discovered URLs in parallel
-3. Save the results as markdown files in the `output` directory
+1. Discover URLs to crawl from the sitemap or llms.txt
+2. Crawl each URL to extract content
+3. Process the content by chunking and summarizing
+4. Generate embeddings for each chunk
+5. Store the chunks in the database
 
-## Configuration
+## Database Schema
 
-The crawler uses several configuration options:
-- Memory threshold: 70% (adjustable)
-- Concurrent requests: 10 (adjustable)
-- Rate limiting: 1-2 second delay between requests
-- Retry attempts: 3 with exponential backoff
+The system requires a Supabase database with a `site_pages` table that has the following schema:
+
+- `url` (text): The URL of the page
+- `chunk_number` (integer): The chunk number
+- `title` (text): The chunk title
+- `summary` (text): A summary of the chunk
+- `content` (text): The chunk content
+- `metadata` (json): Additional metadata
+- `embedding` (vector): The embedding vector
 
 ## Development
 
-For development, install dev dependencies:
-
-```bash
-uv pip install ".[dev]"
-```
-
-Run tests:
-```bash
-uv run pytest
-```
-
-Format and lint code:
-```bash
-# Format with black
-uv run black src tests
-
-# Sort imports
-uv run isort src tests
-
-# Lint with Ruff
-uv run ruff check src tests
-
-# Auto-fix Ruff violations
-uv run ruff check --fix src tests
-```
-
-Type checking:
-```bash
-uv run mypy src
-```
-
-## Output
-
-Results are saved in the `output` directory as markdown files, with:
-- Content from successful crawls
-- Error messages from failed attempts
-- Performance metrics for each URL
+- Run tests: `pytest tests/`
+- Format code: `black src/`
+- Check types: `mypy src/`
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details
+MIT

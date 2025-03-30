@@ -2,8 +2,25 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
+.installed.cfg
+*.egg
+
+# Environment
 .env
 .venv
 env/
@@ -12,14 +29,21 @@ ENV/
 env.bak/
 venv.bak/
 
-# Output directory
-output/
-
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Project specific
+output/
+logs/
+design/
+*.log
+successful_inserts.txt
+failed_inserts.txt
+documents_processed.txt
+crawl_summary.txt
 
 # OS
 .DS_Store
