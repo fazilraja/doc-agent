@@ -12,14 +12,18 @@ setup(
         "python-dotenv",
         "requests",
         "supabase",
-        "openai",
-        "mirascope",
+        "openai>=1.6.0",
+        "google-generativeai>=0.3.0",
+        "mirascope[openai,gemini]",
         "pydantic",
+        "pydantic-ai>=0.0.46",
+        "nest_asyncio>=1.5.6",
+        "streamlit>=1.22.0",
     ],
     entry_points={
         "console_scripts": [
             "doc-agent=main:main",
         ],
     },
-    python_requires=">=3.8",
+    python_requires=">=3.11",
 ) 

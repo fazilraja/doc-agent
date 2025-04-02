@@ -2,11 +2,16 @@ from __future__ import annotations
 from typing import Literal, TypedDict
 import asyncio
 import os
+import nest_asyncio  # Add this import
 
 import streamlit as st
 import json
 from supabase import Client
-from openai import AsyncOpenAI
+import google.generativeai as genai  # For Google AI
+from openai import AsyncOpenAI  # Keep OpenAI for embeddings
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
 # Import all the message part classes
 from pydantic_ai.messages import (
@@ -24,7 +29,19 @@ from chat import mirascope_expert, PydanticAIDeps
 from dotenv import load_dotenv
 load_dotenv()
 
-openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Configure Google AI for LLM
+google_api_key = os.getenv("GOOGLE_API_KEY")
+if not google_api_key:
+    raise ValueError("GOOGLE_API_KEY environment variable must be set")
+genai.configure(api_key=google_api_key)
+
+# Configure OpenAI for embeddings
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    raise ValueError("OPENAI_API_KEY environment variable must be set")
+openai_client = AsyncOpenAI(api_key=openai_api_key)
+
+# Set up Supabase client
 supabase: Client = Client(
     os.getenv("SUPABASE_URL"),
     os.getenv("SUPABASE_KEY")
@@ -67,7 +84,7 @@ async def run_agent_with_streaming(user_input: str):
     # Prepare dependencies
     deps = PydanticAIDeps(
         supabase=supabase,
-        openai_client=openai_client
+        openai_client=openai_client  # Use OpenAI for embeddings
     )
 
     # Run the agent in a stream

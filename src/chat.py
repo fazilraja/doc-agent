@@ -6,9 +6,14 @@ import asyncio
 import httpx
 import os
 import logging
+import nest_asyncio
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
 from pydantic_ai import Agent, ModelRetry, RunContext
-from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.gemini import GeminiModel
+from pydantic_ai.providers.google_gla import GoogleGLAProvider
 from openai import AsyncOpenAI
 from supabase import Client
 from typing import List
@@ -18,8 +23,26 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-llm = os.getenv('LLM_MODEL', 'gpt-4o-mini')
-model = OpenAIModel(llm)
+# Get Google API key
+google_api_key = os.getenv('GOOGLE_API_KEY')
+if not google_api_key:
+    raise ValueError("GOOGLE_API_KEY environment variable must be set")
+
+model_name = "gemini-2.0-flash"
+logging.info(f"Initializing Gemini model: {model_name}")
+try:
+    model = GeminiModel(
+        model_name, 
+        provider=GoogleGLAProvider(
+            api_key=google_api_key,
+            # Add a longer timeout to avoid connection issues
+            http_client=httpx.AsyncClient(timeout=60.0)
+        )
+    )
+    logging.info(f"Successfully initialized Gemini model: {model_name}")
+except Exception as e:
+    logging.error(f"Error initializing Gemini model: {e}")
+    raise
 
 @dataclass
 class PydanticAIDeps:

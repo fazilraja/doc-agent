@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  doc-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: doc-agent
+    volumes:
+      - ./output:/app/output
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    # Override the default command to crawl a specific URL
+    # The URL can be customized when running docker-compose
+    command: --url ${CRAWL_URL:-https://example.com}
+    # Restart policy - you may want to adjust this depending on your use case
+    restart: on-failure
+    # Optional resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G 
